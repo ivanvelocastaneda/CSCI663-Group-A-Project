@@ -1,70 +1,90 @@
 import socket
 import rsa
-import signal
-import sys
+import threading
+import os
+import datetime  # Import datetime module
 
-def rsa_decrypt(encrypted_message, private_key):
-    try:
-        # Attempt to decrypt the message
-        message_bytes = rsa.decrypt(encrypted_message, private_key)
-        return message_bytes.decode('utf-8')
-    except Exception as e:
-        print("Decryption failed:", e)
-        return None
+# Function to decrypt the received message
+def rsa_decrypt(encrypted_message: bytes, private_key: rsa.PrivateKey) -> str:
+    decrypted_message = rsa.decrypt(encrypted_message, private_key)
+    return decrypted_message.decode('utf-8')
 
-def handle_client(client_socket, rsa_private_key):
+# Function to load or generate private key
+def load_or_generate_keys(private_key_path: str = 'private_key.pem', public_key_path: str = 'public_key.pem'):
+    if os.path.exists(private_key_path) and os.path.exists(public_key_path):
+        # Load existing keys
+        with open(private_key_path, 'rb') as key_file:
+            private_key_data = key_file.read()
+        private_key = rsa.PrivateKey.load_pkcs1(private_key_data)
+        
+        with open(public_key_path, 'rb') as key_file:
+            public_key_data = key_file.read()
+        public_key = rsa.PublicKey.load_pkcs1(public_key_data)
+    else:
+        # Generate new key pair if files don't exist
+        public_key, private_key = rsa.newkeys(512)
+        
+        # Save the keys to files
+        with open(private_key_path, 'wb') as key_file:
+            key_file.write(private_key.save_pkcs1())
+        with open(public_key_path, 'wb') as key_file:
+            key_file.write(public_key.save_pkcs1())
+    
+    return public_key, private_key
+
+# Function to handle each client connection
+def handle_client(client_socket, addr, private_key, public_key, message_history):
+    print(f"New connection from {addr}")
+    client_socket.send(public_key.save_pkcs1())  # Send the public key to the client
+    
     try:
         while True:
-            # Receive the encrypted message
             encrypted_message = client_socket.recv(1024)
             if not encrypted_message:
-                print("No data received, closing connection.")
+                print(f"No data received, closing connection with {addr}")
+                break  # If no message is received, close the connection
+
+            # Check for the exit command
+            if encrypted_message == b'exit':
+                print(f"Client {addr} requested to close the connection.")
                 break
-
-            print("Received encrypted message.")
-
-            # Decrypt the message
-            decrypted_message = rsa_decrypt(encrypted_message, rsa_private_key)
-            if decrypted_message is not None:
-                if decrypted_message.strip():  # Check for non-empty decrypted message
-                    print("Received and decrypted message:", decrypted_message)
-                else:
-                    print("Received empty message after decryption.")
-            else:
-                print("Failed to decrypt message.")
-
+            
+            decrypted_message = rsa_decrypt(encrypted_message, private_key)
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Get current timestamp
+            print(f"[{timestamp}] Received and decrypted message: {decrypted_message}")
+            
+            # Update message history with timestamp
+            message_history.append(f"[{timestamp}] From {addr}: {decrypted_message}")
+            print("Message History:", message_history)
+    except Exception as e:
+        print(f"Error handling client {addr}: {e}")
     finally:
-        print("Closing client connection...")
         client_socket.close()
+        print(f"Connection with {addr} closed.")
 
-def signal_handler(sig, frame):
-    print("Shutting down the server gracefully...")
-    sys.exit(0)
-
-def main():
-    # Register signal handler for graceful shutdown
-    signal.signal(signal.SIGINT, signal_handler)
-
-    # Generate RSA keys
-    (public_key, private_key) = rsa.newkeys(512)
-
-    # Create a TCP socket and listen for connections
+# Function to start the server and handle clients
+def start_server():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind(('127.0.0.1', 9999))
-    server_socket.listen(1)
-
+    server_socket.listen(5)
     print("Server is listening on 127.0.0.1:9999...")
 
-    while True:
-        client_socket, addr = server_socket.accept()
-        print(f"New connection from {addr}")
+    # Load or generate RSA keys
+    public_key, private_key = load_or_generate_keys()
+    
+    message_history = []  # Initialize message history
 
-        # Send public key to the client
-        public_key_data = public_key.save_pkcs1()
-        client_socket.send(public_key_data)
-        print("Sent RSA public key to the client.")
-
-        handle_client(client_socket, private_key)
+    try:
+        while True:
+            client_socket, addr = server_socket.accept()
+            # Handle client in a new thread for concurrent connections
+            client_thread = threading.Thread(target=handle_client, args=(client_socket, addr, private_key, public_key, message_history))
+            client_thread.start()
+    except KeyboardInterrupt:
+        print("Shutting down the server gracefully...")
+    finally:
+        server_socket.close()
+        print("Server has been shut down.")
 
 if __name__ == "__main__":
-    main()
+    start_server()
