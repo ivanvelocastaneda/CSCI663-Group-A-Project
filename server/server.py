@@ -3,6 +3,21 @@ import rsa
 import threading
 import os
 import datetime  # Import datetime module
+import random 
+
+# Define static parameters for Diffie-Hellman
+p = 23  # A prime number (use a larger one in production)
+g = 5   # A primitive root modulo p
+
+# Function to generate a private-public key pair for Diffie-Hellman
+def generate_dh_keys():
+    private_key = random.randint(1, p - 2)  # Random private key
+    public_key = pow(g, private_key, p)     # Corresponding public key
+    return private_key, public_key
+  
+# Function to calculate shared key using Diffie-Hellman
+def calculate_shared_key(other_public_key, private_key):
+    return pow(other_public_key, private_key, p)
 
 # Function to decrypt the received message
 def rsa_decrypt(encrypted_message: bytes, private_key: rsa.PrivateKey) -> str:
@@ -35,6 +50,17 @@ def load_or_generate_keys(private_key_path: str = 'private_key.pem', public_key_
 # Function to handle each client connection
 def handle_client(client_socket, addr, private_key, public_key, message_history):
     print(f"New connection from {addr}")
+
+
+    # Diffie-Hellman Key Exchange: Generate server's public-private key pair
+    server_private_dh, server_public_dh = generate_dh_keys()
+    client_socket.send(str(server_public_dh).encode())  # Send public key to client
+    
+    # Receive client's public key for Diffie-Hellman
+    client_public_dh = int(client_socket.recv(1024).decode())
+    shared_key = calculate_shared_key(client_public_dh, server_private_dh)  # Shared session key
+    print(f"Shared DH Key with {addr}: {shared_key}")
+
     client_socket.send(public_key.save_pkcs1())  # Send the public key to the client
     
     try:
@@ -49,6 +75,7 @@ def handle_client(client_socket, addr, private_key, public_key, message_history)
                 print(f"Client {addr} requested to close the connection.")
                 break
             
+            # Decrypt RSA message
             decrypted_message = rsa_decrypt(encrypted_message, private_key)
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Get current timestamp
             print(f"[{timestamp}] Received and decrypted message: {decrypted_message}")
@@ -56,6 +83,7 @@ def handle_client(client_socket, addr, private_key, public_key, message_history)
             # Update message history with timestamp
             message_history.append(f"[{timestamp}] From {addr}: {decrypted_message}")
             print("Message History:", message_history)
+
     except Exception as e:
         print(f"Error handling client {addr}: {e}")
     finally:
@@ -71,7 +99,6 @@ def start_server():
 
     # Load or generate RSA keys
     public_key, private_key = load_or_generate_keys()
-    
     message_history = []  # Initialize message history
 
     try:
