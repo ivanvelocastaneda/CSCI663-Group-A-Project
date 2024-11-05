@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 private_key.pem
 public_key.pem
+.DS_Store
+.idea/
